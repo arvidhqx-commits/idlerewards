@@ -1,0 +1,59 @@
+# IdleRewards configuration
+# Seconds without activity before a player counts as AFK
+afk-after-seconds: 120
+# Seconds of AFK time between two rewards
+reward-interval-seconds: 300
+# Highest number of rewards a single player can earn per day (0 = unlimited)
+max-rewards-per-day: 24
+# Only reward players who are inside one of the zones below.
+# If false, being AFK anywhere is enough.
+require-zone: false
+# Head movement (looking around) counts as activity. Turn on to stop lazy AFK macros.
+look-counts-as-activity: false
+# Progress display while idle: none, actionbar or bossbar
+progress-display: actionbar
+# Worlds where IdleRewards does nothing
+disabled-worlds: []
+
+# Players with idlerewards.multiplier.<n> receive the reward n times.
+# Checked from 10 down to 2, highest match wins.
+
+messages:
+  prefix: '<gray>[<aqua>IdleRewards</aqua>]</gray> '
+  now-afk: '<gray>You are now AFK. Idle rewards are running.</gray>'
+  no-longer-afk: '<gray>Welcome back — you are no longer AFK.</gray>'
+  progress-actionbar: '<aqua>Idle reward in <white>{seconds}s</white></aqua>'
+  progress-bossbar: '<aqua>Next idle reward</aqua>'
+  reward-given: '<green>Idle reward: {reward}</green>'
+  daily-limit: '<yellow>You reached today''s idle reward limit ({limit}).</yellow>'
+  zone-required: '<gray>Move into an AFK zone to earn idle rewards.</gray>'
+  reloaded: '<green>Configuration reloaded.</green>'
+  no-permission: '<red>You are not allowed to do that.</red>'
+  pos-set: '<green>Position {n} set.</green>'
+  zone-created: '<green>Zone "{name}" created.</green>'
+  zone-removed: '<green>Zone "{name}" removed.</green>'
+  zone-missing: '<red>No zone called "{name}".</red>'
+  pos-missing: '<red>Set both positions first: /ir pos1 and /ir pos2.</red>'
+  status: '<gray>AFK: <white>{afk}</white> · idle <white>{idle}s</white> · rewards today <white>{today}</white></gray>'
+
+# Rewards are picked at random, weighted by "chance".
+# Placeholders in commands and messages: %player%
+rewards:
+  small-coins:
+    chance: 70
+    display: '50 coins'
+    commands:
+      - 'eco give %player% 50'
+  diamond:
+    chance: 25
+    display: 'a diamond'
+    commands:
+      - 'give %player% diamond 1'
+  jackpot:
+    chance: 5
+    display: 'a diamond block'
+    commands:
+      - 'give %player% diamond_block 1'
+
+# AFK zones. Create them in-game with /ir pos1, /ir pos2, /ir zone create <name>
+zones: {}

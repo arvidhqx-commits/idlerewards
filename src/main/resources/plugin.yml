@@ -1,0 +1,16 @@
+name: IdleRewards
+version: '${version}'
+main: dev.idlerewards.IdleRewardsPlugin
+api-version: '1.21'
+description: AFK rewards and AFK zones - pay idle players on a timer, with daily caps and permission multipliers.
+commands:
+  idlerewards:
+    description: IdleRewards admin command
+    aliases: [ir]
+permissions:
+  idlerewards.use:
+    description: Receive idle rewards
+    default: true
+  idlerewards.admin:
+    description: Manage zones and reload
+    default: op

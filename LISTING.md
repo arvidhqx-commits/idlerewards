@@ -1,0 +1,6 @@
+**Titel:** IdleRewards — AFK Rewards & AFK Zones [1.21 - 26.2]
+**Tagline:** Pay your AFK players on a timer — weighted rewards, daily caps, rank multipliers and optional AFK zones.
+**Kern:** AFK-reward plugins are a proven server staple — the established ones pulled ~70k downloads between them — but the whole niche has gone quiet, with the leaders untouched for two years and nothing actively maintained above four figures. IdleRewards is a modern rebuild for Paper 1.21+ and 26.x. Rewards are ordinary console commands, so it works with any economy, crate or item plugin without a hard dependency: weighted random chances, a per-player daily cap so AFK farms stay bounded, `idlerewards.multiplier.<n>` for donor ranks, and an optional zone mode where only players inside an AFK area you define in-game get paid. Activity detection covers movement, blocks, inventory, drops and commands, with an option to count head movement so look-around macros stop counting as idle. Action-bar or boss-bar progress, MiniMessage/legacy text, zero dependencies. Actively maintained for every new Minecraft version.
+
+Human-led development: a human maintainer directs, tests and takes responsibility for every release; AI is used as a development tool.
+**Tags:** utility, afk, rewards, economy, management
