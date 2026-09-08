@@ -13,5 +13,8 @@ dependencies {
 }
 java { toolchain.languageVersion.set(JavaLanguageVersion.of(21)) }
 tasks.processResources {
+    // Ohne diese Zeile bleibt processResources bei einem reinen Versionswechsel
+    // UP-TO-DATE und das Jar traegt die ALTE Version im plugin.yml (gefunden 08.09.2026).
+    inputs.property("version", project.version)
     filesMatching("plugin.yml") { expand("version" to project.version) }
 }
