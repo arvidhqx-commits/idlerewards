@@ -8,7 +8,7 @@ Commands: `/ir status` (players) · `/ir reload`, `/ir pos1`, `/ir pos2`, `/ir z
 Permissions: `idlerewards.use` (default: true) · `idlerewards.admin` (op) · `idlerewards.multiplier.2` … `.10`
 
 ## Tested on
-Paper 1.21.11 and Paper 26.2 (runtime-tested, not just "it loads").
+Paper 1.21.11, 26.2 and 26.3 (runtime-tested, not just "it loads").
 
 ## License
 MIT — see [LICENSE](LICENSE).
