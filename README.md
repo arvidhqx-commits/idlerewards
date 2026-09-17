@@ -8,7 +8,14 @@ Commands: `/ir status` (players) · `/ir reload`, `/ir pos1`, `/ir pos2`, `/ir z
 Permissions: `idlerewards.use` (default: true) · `idlerewards.admin` (op) · `idlerewards.multiplier.2` … `.10`
 
 ## Tested on
-Paper 1.21.11, 26.2 and 26.3 (runtime-tested, not just "it loads").
+Paper 1.21.11, 26.2 and 26.3 — a runtime test suite of 72 assertions (AFK detection, reward timing, daily cap, zones, boss bar, config names with dots) runs on all three before every release, not just "it loads".
+
+## Changelog
+**0.1.2** — three fixes found by the new test suite:
+- The daily cap survives relogging and restarts (`daily.yml`). Before, `max-rewards-per-day` was reset by every rejoin, so an AFK farm could just reconnect.
+- Reward names with a dot (`small.coins`) no longer turn into an empty ghost reward that paid nothing.
+- Zone names with a dot (`spawn.afk`, also via `/ir zone create`) are no longer dropped on load.
+No config changes needed.
 
 ## License
 MIT — see [LICENSE](LICENSE).

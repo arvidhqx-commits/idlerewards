@@ -9,6 +9,8 @@ import org.bukkit.command.Command;
 import org.bukkit.command.CommandSender;
 import org.bukkit.command.TabCompleter;
 import org.bukkit.configuration.ConfigurationSection;
+import org.bukkit.configuration.InvalidConfigurationException;
+import org.bukkit.configuration.file.YamlConfiguration;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
@@ -24,6 +26,8 @@ import org.bukkit.event.player.PlayerMoveEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
 import org.bukkit.plugin.java.JavaPlugin;
 
+import java.io.File;
+import java.io.IOException;
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -35,16 +39,18 @@ import java.util.concurrent.ThreadLocalRandom;
 
 public final class IdleRewardsPlugin extends JavaPlugin implements Listener, TabCompleter {
 
-    /** Per-player runtime state. Nothing here is persisted — rewards restart on server restart. */
+    /** Per-player runtime state; dropped on quit. The daily reward count lives in {@link #daily}. */
     private static final class State {
+        final UUID id;
         long lastActivity = System.currentTimeMillis();
         boolean afk;
         int idleSeconds;      // seconds counted towards the next reward
-        int rewardsToday;
-        LocalDate day = LocalDate.now();
         boolean limitNotified;
         boolean zoneNotified;
         BossBar bar;
+        Player barViewer;     // the one player the bar was shown to - hide it from exactly them
+
+        State(UUID id) { this.id = id; }
     }
 
     private record Zone(String world, int x1, int y1, int z1, int x2, int y2, int z2) {
@@ -60,6 +66,13 @@ public final class IdleRewardsPlugin extends JavaPlugin implements Listener, Tab
 
     private final Map<UUID, State> states = new HashMap<>();
     private final Map<UUID, Location[]> selections = new HashMap<>();
+    /**
+     * Rewards earned today per player, kept across relogs (17.09.2026: the count used to live in
+     * State and was reset by every rejoin, so the daily cap was one relog away from being unlimited).
+     * Persisted in daily.yml so a restart does not reset it either.
+     */
+    private final Map<UUID, Integer> daily = new HashMap<>();
+    private LocalDate dailyDay = LocalDate.now();
     private final Map<String, Zone> zones = new HashMap<>();
     private final List<Reward> rewards = new ArrayList<>();
     private int totalChance;
@@ -69,9 +82,18 @@ public final class IdleRewardsPlugin extends JavaPlugin implements Listener, Tab
     private String progressDisplay;
     private List<String> disabledWorlds = List.of();
 
+    /**
+     * Bukkit reads '.' as a path separator: a reward called "small.coins" became a nested section
+     * and showed up as an EMPTY reward "small" with no command; a zone "spawn.afk" was dropped as
+     * "zone 'spawn' has no world" (found 17.09.2026, same class as InfoBar 12.09.). A separator that
+     * cannot occur in a name switches that off. It must be set BEFORE loading.
+     */
+    private static final char SEP = '\u0001';
+
     @Override
     public void onEnable() {
         saveDefaultConfig();
+        loadDaily();
         load();
         getServer().getPluginManager().registerEvents(this, this);
         getServer().getScheduler().runTaskTimer(this, this::tick, 20L, 20L);
@@ -82,6 +104,7 @@ public final class IdleRewardsPlugin extends JavaPlugin implements Listener, Tab
     public void onDisable() {
         for (State s : states.values()) hideBar(s);
         states.clear();
+        saveDaily();
     }
 
     // ---------------------------------------------------------------- config
@@ -101,7 +124,8 @@ public final class IdleRewardsPlugin extends JavaPlugin implements Listener, Tab
 
         rewards.clear();
         totalChance = 0;
-        ConfigurationSection rs = c.getConfigurationSection("rewards");
+        YamlConfiguration names = readNamed();
+        ConfigurationSection rs = names.getConfigurationSection("rewards");
         if (rs != null) {
             for (String key : rs.getKeys(false)) {
                 ConfigurationSection r = rs.getConfigurationSection(key);
@@ -115,7 +139,7 @@ public final class IdleRewardsPlugin extends JavaPlugin implements Listener, Tab
         if (rewards.isEmpty()) getLogger().warning("No rewards configured — players will earn nothing.");
 
         zones.clear();
-        ConfigurationSection zs = c.getConfigurationSection("zones");
+        ConfigurationSection zs = names.getConfigurationSection("zones");
         if (zs != null) {
             for (String name : zs.getKeys(false)) {
                 ConfigurationSection z = zs.getConfigurationSection(name);
@@ -128,6 +152,88 @@ public final class IdleRewardsPlugin extends JavaPlugin implements Listener, Tab
                         Math.max(z.getInt("y1"), z.getInt("y2")), Math.max(z.getInt("z1"), z.getInt("z2"))));
             }
         }
+    }
+
+    /** The config file read with {@link #SEP}: reward and zone names may contain dots. */
+    private YamlConfiguration readNamed() {
+        YamlConfiguration yml = new YamlConfiguration();
+        yml.options().pathSeparator(SEP);
+        try {
+            yml.load(new File(getDataFolder(), "config.yml"));
+        } catch (IOException | InvalidConfigurationException e) {
+            getLogger().warning("Could not read config.yml, no rewards or zones loaded: " + e.getMessage());
+        }
+        return yml;
+    }
+
+    /** Writes a zone (or removes it when {@code sel} is null) without letting a dot in the name nest the path. */
+    private void writeZone(String name, Location[] sel) {
+        YamlConfiguration yml = readNamed();
+        String path = "zones" + SEP + name;
+        if (sel == null) {
+            yml.set(path, null);
+        } else {
+            yml.set(path + SEP + "world", sel[0].getWorld().getName());
+            yml.set(path + SEP + "x1", sel[0].getBlockX());
+            yml.set(path + SEP + "y1", sel[0].getBlockY());
+            yml.set(path + SEP + "z1", sel[0].getBlockZ());
+            yml.set(path + SEP + "x2", sel[1].getBlockX());
+            yml.set(path + SEP + "y2", sel[1].getBlockY());
+            yml.set(path + SEP + "z2", sel[1].getBlockZ());
+        }
+        if (yml.getConfigurationSection("zones") == null) yml.createSection("zones");
+        try {
+            yml.save(new File(getDataFolder(), "config.yml"));
+        } catch (IOException e) {
+            getLogger().warning("Could not save config.yml: " + e.getMessage());
+        }
+    }
+
+    // ---------------------------------------------------------------- daily counts
+
+    private File dailyFile() { return new File(getDataFolder(), "daily.yml"); }
+
+    private void loadDaily() {
+        daily.clear();
+        dailyDay = LocalDate.now();
+        File f = dailyFile();
+        if (!f.exists()) return;
+        YamlConfiguration yml = YamlConfiguration.loadConfiguration(f);
+        // Stored as an epoch day, not as "2026-09-17": YAML reads an unquoted date as a
+        // java.util.Date and the string compare would silently void every day's counts.
+        if (yml.getLong("day", -1L) != dailyDay.toEpochDay()) return;   // counts from another day are void
+        ConfigurationSection counts = yml.getConfigurationSection("counts");
+        if (counts == null) return;
+        for (String key : counts.getKeys(false)) {
+            try {
+                daily.put(UUID.fromString(key), Math.max(0, counts.getInt(key)));
+            } catch (IllegalArgumentException ignored) {
+            }
+        }
+    }
+
+    private void saveDaily() {
+        YamlConfiguration yml = new YamlConfiguration();
+        yml.set("day", dailyDay.toEpochDay());
+        for (Map.Entry<UUID, Integer> e : daily.entrySet()) yml.set("counts." + e.getKey(), e.getValue());
+        try {
+            yml.save(dailyFile());
+        } catch (IOException e) {
+            getLogger().warning("Could not save daily.yml: " + e.getMessage());
+        }
+    }
+
+    private int rewardsToday(UUID id) {
+        return daily.getOrDefault(id, 0);
+    }
+
+    /** New day: everyone starts at zero and may be told about the limit again. */
+    private void rollDay(LocalDate today) {
+        if (today.equals(dailyDay)) return;
+        dailyDay = today;
+        daily.clear();
+        for (State s : states.values()) s.limitNotified = false;
+        saveDaily();
     }
 
     private String msg(String path) {
@@ -144,7 +250,7 @@ public final class IdleRewardsPlugin extends JavaPlugin implements Listener, Tab
     // ---------------------------------------------------------------- activity
 
     private State state(Player p) {
-        return states.computeIfAbsent(p.getUniqueId(), k -> new State());
+        return states.computeIfAbsent(p.getUniqueId(), State::new);
     }
 
     /** Any of these resets the idle timer and ends AFK. */
@@ -192,7 +298,7 @@ public final class IdleRewardsPlugin extends JavaPlugin implements Listener, Tab
     public void onCommand(PlayerCommandPreprocessEvent e) { active(e.getPlayer()); }
 
     @EventHandler
-    public void onJoin(PlayerJoinEvent e) { states.put(e.getPlayer().getUniqueId(), new State()); }
+    public void onJoin(PlayerJoinEvent e) { states.put(e.getPlayer().getUniqueId(), new State(e.getPlayer().getUniqueId())); }
 
     @EventHandler
     public void onQuit(PlayerQuitEvent e) {
@@ -205,51 +311,48 @@ public final class IdleRewardsPlugin extends JavaPlugin implements Listener, Tab
 
     private void tick() {
         long now = System.currentTimeMillis();
-        LocalDate today = LocalDate.now();
-        for (Player p : Bukkit.getOnlinePlayers()) {
-            State s = state(p);
-            if (!s.day.equals(today)) {
-                s.day = today;
-                s.rewardsToday = 0;
-                s.limitNotified = false;
-            }
-            if (disabledWorlds.contains(p.getWorld().getName()) || !p.hasPermission("idlerewards.use")) {
-                hideBar(s);
-                continue;
-            }
-            boolean idle = now - s.lastActivity >= afkAfter * 1000L;
-            if (!idle) { hideBar(s); continue; }
-            if (!s.afk) {
-                s.afk = true;
-                s.idleSeconds = 0;
-                s.zoneNotified = false;
-                send(p, "now-afk");
-            }
-            if (requireZone && !inZone(p.getLocation())) {
-                s.idleSeconds = 0;
-                hideBar(s);
-                if (!s.zoneNotified) {
-                    s.zoneNotified = true;
-                    send(p, "zone-required");
-                }
-                continue;
-            }
+        rollDay(LocalDate.now());
+        for (Player p : Bukkit.getOnlinePlayers()) tickPlayer(p, state(p), now);
+    }
+
+    /** One player's idle second. Kept apart from tick() so it runs with any Player and any clock. */
+    private void tickPlayer(Player p, State s, long now) {
+        if (disabledWorlds.contains(p.getWorld().getName()) || !p.hasPermission("idlerewards.use")) {
+            hideBar(s);
+            return;
+        }
+        boolean idle = now - s.lastActivity >= afkAfter * 1000L;
+        if (!idle) { hideBar(s); return; }
+        if (!s.afk) {
+            s.afk = true;
+            s.idleSeconds = 0;
             s.zoneNotified = false;
-            if (maxPerDay > 0 && s.rewardsToday >= maxPerDay) {
-                if (!s.limitNotified) {
-                    s.limitNotified = true;
-                    send(p, "daily-limit", "limit", String.valueOf(maxPerDay));
-                }
-                hideBar(s);
-                continue;
+            send(p, "now-afk");
+        }
+        if (requireZone && !inZone(p.getLocation())) {
+            s.idleSeconds = 0;
+            hideBar(s);
+            if (!s.zoneNotified) {
+                s.zoneNotified = true;
+                send(p, "zone-required");
             }
-            s.idleSeconds++;
-            if (s.idleSeconds >= interval) {
-                s.idleSeconds = 0;
-                grant(p, s);
-            } else {
-                showProgress(p, s);
+            return;
+        }
+        s.zoneNotified = false;
+        if (maxPerDay > 0 && rewardsToday(s.id) >= maxPerDay) {
+            if (!s.limitNotified) {
+                s.limitNotified = true;
+                send(p, "daily-limit", "limit", String.valueOf(maxPerDay));
             }
+            hideBar(s);
+            return;
+        }
+        s.idleSeconds++;
+        if (s.idleSeconds >= interval) {
+            s.idleSeconds = 0;
+            grant(p, s);
+        } else {
+            showProgress(p, s);
         }
     }
 
@@ -277,7 +380,8 @@ public final class IdleRewardsPlugin extends JavaPlugin implements Listener, Tab
                 }
             }
         }
-        s.rewardsToday++;
+        daily.merge(s.id, 1, Integer::sum);
+        saveDaily();
         String display = picked.display() + (times > 1 ? " x" + times : "");
         send(p, "reward-given", "reward", display);
     }
@@ -300,6 +404,7 @@ public final class IdleRewardsPlugin extends JavaPlugin implements Listener, Tab
             Component title = Msg.parse(msg("progress-bossbar").replace("{seconds}", String.valueOf(left)));
             if (s.bar == null) {
                 s.bar = BossBar.bossBar(title, progress, BossBar.Color.BLUE, BossBar.Overlay.PROGRESS);
+                s.barViewer = p;
                 p.showBossBar(s.bar);
             } else {
                 s.bar.name(title);
@@ -310,8 +415,9 @@ public final class IdleRewardsPlugin extends JavaPlugin implements Listener, Tab
 
     private void hideBar(State s) {
         if (s.bar == null) return;
-        for (Player p : Bukkit.getOnlinePlayers()) p.hideBossBar(s.bar);
+        if (s.barViewer != null) s.barViewer.hideBossBar(s.bar);
         s.bar = null;
+        s.barViewer = null;
     }
 
     // ---------------------------------------------------------------- command
@@ -328,7 +434,7 @@ public final class IdleRewardsPlugin extends JavaPlugin implements Listener, Tab
             if (!(sender instanceof Player p)) { sender.sendMessage("Players only."); return true; }
             State s = state(p);
             send(p, "status", "afk", String.valueOf(s.afk), "idle", String.valueOf(s.idleSeconds),
-                    "today", String.valueOf(s.rewardsToday));
+                    "today", String.valueOf(rewardsToday(s.id)));
             return true;
         }
 
@@ -367,8 +473,7 @@ public final class IdleRewardsPlugin extends JavaPlugin implements Listener, Tab
         if (action.equals("remove")) {
             if (!zones.containsKey(name)) { send(sender, "zone-missing", "name", name); return; }
             zones.remove(name);
-            getConfig().set("zones." + name, null);
-            saveConfig();
+            writeZone(name, null);
             send(sender, "zone-removed", "name", name);
             return;
         }
@@ -383,15 +488,7 @@ public final class IdleRewardsPlugin extends JavaPlugin implements Listener, Tab
             send(p, "pos-missing");
             return;
         }
-        String path = "zones." + name + ".";
-        getConfig().set(path + "world", sel[0].getWorld().getName());
-        getConfig().set(path + "x1", sel[0].getBlockX());
-        getConfig().set(path + "y1", sel[0].getBlockY());
-        getConfig().set(path + "z1", sel[0].getBlockZ());
-        getConfig().set(path + "x2", sel[1].getBlockX());
-        getConfig().set(path + "y2", sel[1].getBlockY());
-        getConfig().set(path + "z2", sel[1].getBlockZ());
-        saveConfig();
+        writeZone(name, sel);
         load();
         send(p, "zone-created", "name", name);
     }
